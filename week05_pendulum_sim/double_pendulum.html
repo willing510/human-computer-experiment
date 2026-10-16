@@ -1,0 +1,704 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>双摆混沌模拟器 · RK4 · Week 05</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body {
+    background: #1a1a24;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #cfd4e0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* flex-basis:0 —— 画布高度只由剩余空间决定，不受 canvas.height 属性反噬 */
+  #stage { display: block; width: 100%; flex: 1 1 0; min-height: 0; touch-action: none; cursor: default; }
+
+  .panel {
+    position: fixed;
+    background: rgba(28, 28, 40, 0.82);
+    border: 1px solid rgba(120, 200, 255, 0.18);
+    border-radius: 10px;
+    padding: 14px 16px;
+    backdrop-filter: blur(6px);
+    font-size: 12px;
+    line-height: 1.9;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+    user-select: none;
+  }
+  #readout { right: 20px; top: 20px; min-width: 216px; }
+
+  #dock {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 18px;
+    padding: 12px 22px 14px;
+    background: rgba(24, 24, 34, 0.94);
+    border-top: 1px solid rgba(120, 200, 255, 0.16);
+    box-shadow: 0 -8px 26px rgba(0, 0, 0, 0.45);
+    user-select: none;
+    flex-wrap: wrap;
+  }
+  .dock-btns { flex: 1 1 300px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+  .dock-btns button { flex: 0 0 auto; padding: 8px 14px; }
+  .tip { color: #4d5468; font-size: 11px; letter-spacing: 1px; }
+
+  .panel h2 {
+    font-size: 12px; font-weight: 600; letter-spacing: 2px;
+    color: #56e1ff; margin-bottom: 10px; text-transform: uppercase;
+    border-bottom: 1px solid rgba(86, 225, 255, 0.2); padding-bottom: 6px;
+  }
+  .row { display: flex; justify-content: space-between; align-items: center; margin: 5px 0; }
+  .row label { color: #8b93a7; }
+  .row .val { color: #e6ebf5; font-variant-numeric: tabular-nums; font-family: monospace; }
+  .row .val em { color: #56e1ff; font-style: normal; }
+
+  .ctrl { flex: 1 1 132px; min-width: 128px; margin: 0; }
+  .ctrl .cap { display: flex; justify-content: space-between; color: #8b93a7; font-size: 11px; }
+  .ctrl .cap b { color: #56e1ff; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 4px; border-radius: 2px;
+    background: rgba(86, 225, 255, 0.22);
+    outline: none; margin-top: 7px; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 13px; height: 13px; border-radius: 50%;
+    background: #56e1ff; border: none; box-shadow: 0 0 8px rgba(86, 225, 255, 0.9);
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 13px; height: 13px; border-radius: 50%; border: none;
+    background: #56e1ff; box-shadow: 0 0 8px rgba(86, 225, 255, 0.9);
+  }
+  button {
+    padding: 7px 0;
+    background: rgba(86, 225, 255, 0.1);
+    border: 1px solid rgba(86, 225, 255, 0.35);
+    border-radius: 6px; color: #56e1ff;
+    font-size: 12px; cursor: pointer; transition: background .15s;
+  }
+  button:hover { background: rgba(86, 225, 255, 0.22); }
+
+  /* 天体场景胶囊 */
+  .scene-row { flex: 1 1 100%; display: flex; gap: 8px; flex-wrap: wrap; align-items: center; padding-bottom: 6px; margin-bottom: 4px; border-bottom: 1px dashed rgba(120,200,255,0.10); }
+  .scene-chip {
+    background: rgba(86, 225, 255, 0.08);
+    border: 1px solid rgba(86, 225, 255, 0.30);
+    border-radius: 999px;
+    padding: 6px 14px;
+    color: #cfd4e0;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background .15s, color .15s, box-shadow .15s, border-color .15s;
+    font-family: inherit;
+  }
+  .scene-chip:hover { background: rgba(86, 225, 255, 0.20); color: #fff; }
+  .scene-chip.active {
+    background: linear-gradient(135deg, rgba(86,225,255,0.32), rgba(120,235,255,0.22));
+    border-color: rgba(86,225,255,0.75);
+    color: #eafcff;
+    box-shadow: 0 0 14px rgba(86,225,255,0.35);
+  }
+
+  .check { display: flex; align-items: center; gap: 7px; color: #8b93a7; cursor: pointer; white-space: nowrap; }
+  .check input { accent-color: #56e1ff; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<div class="panel" id="readout">
+  <h2>State · RK4</h2>
+  <div class="row"><label>θ₁</label><span class="val"><em id="v-t1">0.0</em> °</span></div>
+  <div class="row"><label>θ₂</label><span class="val"><em id="v-t2">0.0</em> °</span></div>
+  <div class="row"><label>ω₁</label><span class="val" id="v-w1">0.00 rad/s</span></div>
+  <div class="row"><label>ω₂</label><span class="val" id="v-w2">0.00 rad/s</span></div>
+  <div class="row"><label>总能量 E</label><span class="val" id="v-eng">0.000 J</span></div>
+  <div class="row"><label>能量漂移</label><span class="val" id="v-drf">0.000 %</span></div>
+  <div class="row"><label>步长 h</label><span class="val" id="v-h">0.83 ms</span></div>
+  <div class="row"><label>帧率</label><span class="val" id="v-fps">60 fps</span></div>
+</div>
+
+<div id="dock">
+  <div class="scene-row">
+    <button class="scene-chip" data-scene="earth"   title="地表 9.80 m/s²">地球 9.80</button>
+    <button class="scene-chip" data-scene="moon"    title="月面 1.62 m/s²">月球 1.62</button>
+    <button class="scene-chip" data-scene="jupiter" title="木星云顶 24.79 m/s²">木星 24.79</button>
+    <button class="scene-chip" data-scene="space"   title="近地轨道微重力 0.10 m/s²">太空 0.10</button>
+  </div>
+  <div class="ctrl">
+    <div class="cap"><span>上摆长 L₁</span><b><span id="c-l1">1.20</span> m</b></div>
+    <input type="range" id="s-l1" min="0.4" max="2.0" step="0.05" value="1.2">
+  </div>
+  <div class="ctrl">
+    <div class="cap"><span>下摆长 L₂</span><b><span id="c-l2">1.20</span> m</b></div>
+    <input type="range" id="s-l2" min="0.4" max="2.0" step="0.05" value="1.2">
+  </div>
+  <div class="ctrl">
+    <div class="cap"><span>质量 m₁</span><b><span id="c-m1">1.0</span> kg</b></div>
+    <input type="range" id="s-m1" min="0.2" max="4" step="0.1" value="1">
+  </div>
+  <div class="ctrl">
+    <div class="cap"><span>质量 m₂</span><b><span id="c-m2">1.0</span> kg</b></div>
+    <input type="range" id="s-m2" min="0.2" max="4" step="0.1" value="1">
+  </div>
+  <div class="ctrl">
+    <div class="cap"><span>重力 g</span><b><span id="c-g">9.8</span> m/s²</b></div>
+    <input type="range" id="s-g" min="1" max="25" step="0.1" value="9.8">
+  </div>
+  <div class="ctrl">
+    <div class="cap"><span>阻尼</span><b><span id="c-dp">0.000</span></b></div>
+    <input type="range" id="s-dp" min="0" max="0.3" step="0.005" value="0">
+  </div>
+
+  <div class="dock-btns">
+    <button id="b-reset">重置 (R)</button>
+    <button id="b-pause">暂停 (空格)</button>
+    <button id="b-clear">清拖尾</button>
+    <label class="check"><input type="checkbox" id="c-ghost">混沌对照 (+0.001 rad)</label>
+    <span class="tip">可直接拖拽摆球 · 空格暂停 · R 重置</span>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const canvas = document.getElementById("stage");
+  const ctx = canvas.getContext("2d");
+
+  const BG        = "#1a1a24";
+  const FIXED_H   = 1 / 1200;   // 基准积分步长(秒)
+  const MAX_SUB   = 400;        // 单帧最大子步数，防止卡顿雪崩
+  const TRAIL_MAX = 150;        // 彩虹拖尾采样点
+  const TAU       = Math.PI * 2;
+  const DEG       = 180 / Math.PI;
+  const GHOST_D   = 0.001;      // 混沌对照的初始角扰动(rad)
+
+  // ---------- 参数与状态 ----------
+  // y = [θ₁, ω₁, θ₂, ω₂]，θ 自铅垂向下量起
+  const P = { L1: 1.2, L2: 1.2, m1: 1.0, m2: 1.0, g: 9.8, damp: 0 };
+  let y = [Math.PI / 2, 0, Math.PI / 2, 0];
+  let gy = null;                    // 混沌对照摆（ghost）
+  let E0 = 0, Eref = 1, drift = 0, curH = FIXED_H;
+
+  let running = true, useGhost = false, dragging = 0;
+  let trail = [], hueBase = 0;
+  let W = 0, H = 0, scale = 100, px = 0, py = 0;
+  let P1 = { x: 0, y: 0 }, P2 = { x: 0, y: 0 };   // 两球屏幕坐标(供命中检测)
+
+  function wrap(a) { return a - TAU * Math.round(a / TAU); }
+
+  function reset() {
+    y = [Math.PI / 2, 0, Math.PI / 2, 0];
+    syncGhost();
+    rebase();
+    trail = [];
+  }
+  // 能量基准：分母取系统固有能量尺度而非 |E₀|
+  // （θ₁=θ₂=90° 的初始构型总能量恰为 0，用 |E₀| 做分母会让漂移率永久显示 0）
+  function rebase() {
+    E0 = energy(y);
+    Eref = Math.max(1e-6, (P.m1 + P.m2) * P.g * (P.L1 + P.L2));
+    drift = 0;
+  }
+  function syncGhost() {
+    gy = useGhost ? [y[0] + GHOST_D, y[1], y[2], y[3]] : null;
+  }
+
+  // ---------- 双摆运动方程（点质量 + 无质量刚性杆） ----------
+  function deriv(s, out) {
+    const th1 = s[0], w1 = s[1], th2 = s[2], w2 = s[3];
+    const m1 = P.m1, m2 = P.m2, L1 = P.L1, L2 = P.L2, g = P.g;
+    const d  = th1 - th2;
+    const sd = Math.sin(d), cd = Math.cos(d);
+    const den = 2 * m1 + m2 - m2 * Math.cos(2 * d);   // ∈[2m1, 2m1+2m2]，恒 > 0
+
+    const a1 = (-g * (2 * m1 + m2) * Math.sin(th1)
+                - m2 * g * Math.sin(th1 - 2 * th2)
+                - 2 * sd * m2 * (w2 * w2 * L2 + w1 * w1 * L1 * cd)) / (L1 * den);
+
+    const a2 = (2 * sd * (w1 * w1 * L1 * (m1 + m2)
+                + g * (m1 + m2) * Math.cos(th1)
+                + w2 * w2 * L2 * m2 * cd)) / (L2 * den);
+
+    out[0] = w1;
+    out[1] = a1 - P.damp * w1;     // 线性阻尼
+    out[2] = w2;
+    out[3] = a2 - P.damp * w2;
+    return out;
+  }
+
+  // ---------- 经典 RK4 ----------
+  const k1 = [0, 0, 0, 0], k2 = [0, 0, 0, 0], k3 = [0, 0, 0, 0], k4 = [0, 0, 0, 0], tmp = [0, 0, 0, 0];
+  function rk4(s, h) {
+    deriv(s, k1);
+    for (let i = 0; i < 4; i++) tmp[i] = s[i] + k1[i] * h / 2;
+    deriv(tmp, k2);
+    for (let i = 0; i < 4; i++) tmp[i] = s[i] + k2[i] * h / 2;
+    deriv(tmp, k3);
+    for (let i = 0; i < 4; i++) tmp[i] = s[i] + k3[i] * h;
+    deriv(tmp, k4);
+    for (let i = 0; i < 4; i++) s[i] += h / 6 * (k1[i] + 2 * k2[i] + 2 * k3[i] + k4[i]);
+    s[0] = wrap(s[0]);            // 仅影响读数，动力学只依赖 sin/cos
+    s[2] = wrap(s[2]);
+  }
+
+  // ---------- 能量（用于监测数值是否发散） ----------
+  function energy(s) {
+    const th1 = s[0], w1 = s[1], th2 = s[2], w2 = s[3];
+    const L1 = P.L1, L2 = P.L2, m1 = P.m1, m2 = P.m2, g = P.g;
+    const v1sq = L1 * L1 * w1 * w1;
+    const v2sq = L1 * L1 * w1 * w1 + L2 * L2 * w2 * w2
+               + 2 * L1 * L2 * w1 * w2 * Math.cos(th1 - th2);
+    const h1 = -L1 * Math.cos(th1);
+    const h2 = h1 - L2 * Math.cos(th2);
+    return 0.5 * m1 * v1sq + 0.5 * m2 * v2sq + m1 * g * h1 + m2 * g * h2;
+  }
+
+  function finite(s) {
+    for (let i = 0; i < 4; i++) if (!Number.isFinite(s[i])) return false;
+    return Math.abs(s[1]) < 1e4 && Math.abs(s[3]) < 1e4;
+  }
+
+  // ---------- 尺寸自适应 ----------
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    W = canvas.clientWidth  || window.innerWidth;
+    H = canvas.clientHeight || window.innerHeight;
+    canvas.width  = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    px = W / 2; py = H / 2;
+    rescale();
+    trail = [];
+  }
+  // 显示比例与物理长度解耦：物理用米，屏幕自动缩放保证整盘可见
+  function rescale() {
+    const R = P.L1 + P.L2;
+    scale = Math.max(10, (Math.min(W, H) * 0.5 - 34) / R);
+  }
+  window.addEventListener("resize", resize);
+
+  // ---------- 绘制 ----------
+  function drawGrid() {
+    ctx.save();
+    ctx.strokeStyle = "rgba(120, 200, 255, 0.04)";
+    ctx.lineWidth = 1;
+    const gap = 44;
+    ctx.beginPath();
+    for (let x = (W / 2) % gap; x < W; x += gap) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+    for (let y = (H / 2) % gap; y < H; y += gap) { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function joint(x, y, r, color) {
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.fillStyle = color;
+    ctx.fill();
+  }
+
+  // 第二个摆球：半透明 + 彩虹拖尾
+  function drawTrail() {
+    if (trail.length < 2) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "lighter";   // 叠加发光，暗底上呈霓虹感
+    ctx.lineCap = "round";
+    for (let i = 1; i < trail.length; i++) {
+      const t = i / trail.length;                        // 0=最旧 1=最新
+      const hue = (hueBase + i * 1.7) % 360;             // 沿轨迹流动的彩虹
+      const alpha = Math.pow(t, 1.4) * 0.72;             // 越旧越淡（衰减）
+      ctx.strokeStyle = "hsla(" + hue.toFixed(0) + ",95%,62%," + alpha.toFixed(3) + ")";
+      ctx.lineWidth = 1 + t * 9;                         // 越新越粗（锥形）
+      ctx.beginPath();
+      ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
+      ctx.lineTo(trail[i].x, trail[i].y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawRod(x0, y0, x1, y1, alpha) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.lineCap = "round";
+    ctx.lineWidth = 3;
+    const g = ctx.createLinearGradient(x0, y0, x1, y1);
+    g.addColorStop(0, "rgba(170, 190, 220, 0.9)");
+    g.addColorStop(1, "rgba(120, 235, 255, 0.95)");
+    ctx.strokeStyle = g;
+    ctx.beginPath();
+    ctx.moveTo(x0, y0);
+    ctx.lineTo(x1, y1);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawBob(x, y, r, hue, alpha, glow) {
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.shadowColor = "hsla(" + hue + ",100%,60%,0.95)";
+    ctx.shadowBlur = glow;
+    const g = ctx.createRadialGradient(x - r * 0.35, y - r * 0.4, r * 0.12, x, y, r);
+    g.addColorStop(0.00, "rgba(255,255,255,0.95)");
+    g.addColorStop(0.35, "hsla(" + hue + ",95%,65%,0.95)");
+    g.addColorStop(1.00, "hsla(" + ((hue + 30) % 360) + ",90%,42%,0.85)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(x, y, r, 0, TAU);
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.restore();
+  }
+
+  // ---------- 渲染主流程 ----------
+  function render() {
+    const l1 = P.L1 * scale, l2 = P.L2 * scale;
+    const jx = px + l1 * Math.sin(y[0]);
+    const jy = py + l1 * Math.cos(y[0]);
+    P1 = { x: jx, y: jy };
+    const bx = jx + l2 * Math.sin(y[2]);
+    const by = jy + l2 * Math.cos(y[2]);
+    P2 = { x: bx, y: by };
+
+    const r1 = 8 + 4 * Math.sqrt(P.m1);
+    const r2 = 8 + 4 * Math.sqrt(P.m2);
+    const hue2 = hueBase % 360;
+
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+    drawGrid();
+
+    // 混沌对照摆（先画，作为背景虚影）
+    if (useGhost && gy) {
+      const gl1 = P.L1 * scale, gl2 = P.L2 * scale;
+      const gjx = px + gl1 * Math.sin(gy[0]);
+      const gjy = py + gl1 * Math.cos(gy[0]);
+      const gbx = gjx + gl2 * Math.sin(gy[2]);
+      const gby = gjy + gl2 * Math.cos(gy[2]);
+      drawRod(px, py, gjx, gjy, 0.18);
+      drawRod(gjx, gjy, gbx, gby, 0.18);
+      drawBob(gjx, gjy, r1 * 0.85, 210, 0.16, 0);
+      drawBob(gbx, gby, r2 * 0.85, 210, 0.16, 0);
+    }
+
+    // 铅垂参考线
+    ctx.save();
+    ctx.setLineDash([4, 7]);
+    ctx.strokeStyle = "rgba(140,160,190,0.16)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(px, py - (P.L1 + P.L2) * scale - 10);
+    ctx.lineTo(px, py + (P.L1 + P.L2) * scale + 10);
+    ctx.stroke();
+    ctx.restore();
+
+    drawTrail();
+
+    // 主摆
+    drawRod(px, py, jx, jy, 1);
+    drawRod(jx, jy, bx, by, 1);
+    drawBob(jx, jy, r1, 195, 0.95, 22);      // 上球：青蓝实心
+    drawBob(bx, by, r2, hue2, 0.62, 26);     // 下球：半透明 + 彩虹色相
+
+    // 支点
+    ctx.save();
+    ctx.shadowColor = "rgba(160,190,220,0.8)";
+    ctx.shadowBlur = 10;
+    joint(px, py, 6, "#9fb0c8");
+    ctx.restore();
+
+    return { bx: bx, by: by };
+  }
+
+  // ---------- 读数 ----------
+  const el = {
+    t1: document.getElementById("v-t1"), t2: document.getElementById("v-t2"),
+    w1: document.getElementById("v-w1"), w2: document.getElementById("v-w2"),
+    eng: document.getElementById("v-eng"), drf: document.getElementById("v-drf"),
+    hh: document.getElementById("v-h"), fps: document.getElementById("v-fps")
+  };
+  let fpsAcc = 0, fpsCnt = 0, fpsShown = 60;
+
+  function updateReadout() {
+    const E = energy(y);
+    drift = (E - E0) / Eref * 100;      // 相对系统能量尺度的漂移率
+    el.t1.textContent = (y[0] * DEG).toFixed(1);
+    el.t2.textContent = (y[2] * DEG).toFixed(1);
+    el.w1.textContent = y[1].toFixed(2) + " rad/s";
+    el.w2.textContent = y[3].toFixed(2) + " rad/s";
+    el.eng.textContent = E.toFixed(3) + " J";
+    el.drf.textContent = drift.toFixed(4) + " %";
+    el.hh.textContent = (curH * 1000).toFixed(2) + " ms";
+    el.fps.textContent = fpsShown + " fps";
+  }
+
+  // ---------- 主循环 ----------
+  let last = performance.now();
+  let acc = 0;
+
+  function frame(now) {
+    updateTween(now);              // 平滑过渡（若有）；过渡中会改 P 并打断物理积分
+    let real = (now - last) / 1000;
+    last = now;
+    if (real > 0.05) real = 0.05;               // 切后台回来防跳步
+
+    fpsAcc += real; fpsCnt++;
+    if (fpsAcc >= 0.5) { fpsShown = Math.round(fpsCnt / fpsAcc); fpsAcc = 0; fpsCnt = 0; }
+
+    if (running && !dragging && !tween) {
+      // 自适应步长：翻转越快、ω 越大，步长越小（混沌系统对误差极敏感）
+      const wmax = Math.max(Math.abs(y[1]), Math.abs(y[3]));
+      let h = FIXED_H;
+      if (wmax > 8)  h = FIXED_H / 2;
+      if (wmax > 16) h = FIXED_H / 4;
+      if (wmax > 30) h = FIXED_H / 8;
+      curH = h;
+
+      acc += real;
+      let n = 0;
+      while (acc >= h && n < MAX_SUB) {
+        rk4(y, h);
+        if (useGhost && gy) rk4(gy, h);
+        acc -= h; n++;
+      }
+      if (n >= MAX_SUB) acc = 0;               // 追不上就丢弃积压，绝不无限循环
+
+      if (!finite(y) || (gy && !finite(gy))) reset();   // 兜底：杜绝数值发散
+    } else {
+      acc = 0;
+    }
+
+    hueBase = (hueBase + 0.7) % 360;
+
+    const pos = render();
+
+    if (running && !dragging && !tween) {
+      trail.push({ x: pos.bx, y: pos.by });
+      if (trail.length > TRAIL_MAX) trail.shift();
+    }
+
+    updateReadout();
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- 鼠标 / 触摸拖拽 ----------
+  function toCanvas(e) {
+    const r = canvas.getBoundingClientRect();
+    return { x: e.clientX - r.left, y: e.clientY - r.top };
+  }
+  function hit(m, c, r) {
+    const dx = m.x - c.x, dy = m.y - c.y;
+    return dx * dx + dy * dy <= (r + 10) * (r + 10);
+  }
+
+  canvas.addEventListener("pointerdown", function (e) {
+    const m = toCanvas(e);
+    const r2 = 8 + 4 * Math.sqrt(P.m2);
+    const r1 = 8 + 4 * Math.sqrt(P.m1);
+    if (hit(m, P2, r2))       dragging = 2;
+    else if (hit(m, P1, r1))  dragging = 1;
+    else return;
+
+    y[1] = 0; y[3] = 0;            // 拖拽期间视为静止
+    trail = [];
+    canvas.setPointerCapture(e.pointerId);
+    canvas.style.cursor = "grabbing";
+  });
+
+  canvas.addEventListener("pointermove", function (e) {
+    const m = toCanvas(e);
+    if (!dragging) {
+      const r2 = 8 + 4 * Math.sqrt(P.m2);
+      const r1 = 8 + 4 * Math.sqrt(P.m1);
+      canvas.style.cursor = (hit(m, P2, r2) || hit(m, P1, r1)) ? "grab" : "default";
+      return;
+    }
+    const l1 = P.L1 * scale;
+    if (dragging === 1) {
+      y[0] = Math.atan2(m.x - px, m.y - py);       // 相对支点
+    } else {
+      y[2] = Math.atan2(m.x - P1.x, m.y - P1.y);   // 相对上球关节
+    }
+    y[1] = 0; y[3] = 0;
+  });
+
+  function endDrag(e) {
+    if (!dragging) return;
+    dragging = 0;
+    y[1] = 0; y[3] = 0;            // 释放时零初速度，从该构型自由演化
+    syncGhost();
+    rebase();                      // 重设能量基准，避免拖拽后误报漂移
+    canvas.style.cursor = "grab";
+    if (e && e.pointerId !== undefined && canvas.hasPointerCapture(e.pointerId)) {
+      canvas.releasePointerCapture(e.pointerId);
+    }
+  }
+  canvas.addEventListener("pointerup", endDrag);
+  canvas.addEventListener("pointercancel", endDrag);
+
+  // ---------- 控件 ----------
+  function bind(sid, lid, key, fmt, after) {
+    const s = document.getElementById(sid), l = document.getElementById(lid);
+    s.addEventListener("input", function () {
+      P[key] = parseFloat(s.value);
+      l.textContent = fmt(P[key]);
+      tween = null;                                  // 用户接管，立刻打断过渡
+      if (currentScene !== null) { currentScene = null; updateSceneChips(); }
+      if (after) after();
+      rebase();                                      // 参数变了，能量尺度随之改变，必须重设基准
+      saveSoon();                                    // 持久化（防抖）
+    });
+  }
+  const f1 = function (v) { return v.toFixed(1); };
+  const f2 = function (v) { return v.toFixed(2); };
+  const f3 = function (v) { return v.toFixed(3); };
+
+  bind("s-l1", "c-l1", "L1",   f2, rescale);
+  bind("s-l2", "c-l2", "L2",   f2, rescale);
+  bind("s-m1", "c-m1", "m1",   f1);
+  bind("s-m2", "c-m2", "m2",   f1);
+  bind("s-g",  "c-g",  "g",    f1);
+  bind("s-dp", "c-dp", "damp", f3);
+
+  // ---------- 场景胶囊 / 平滑过渡 / 本地持久化 ----------
+  const PRESETS = {
+    earth:   { L1: 1.2, L2: 1.2, m1: 1.0, m2: 1.0, g: 9.80, damp: 0.00 },
+    moon:    { L1: 1.2, L2: 1.2, m1: 1.0, m2: 1.0, g: 1.62, damp: 0.00 },
+    jupiter: { L1: 0.9, L2: 0.9, m1: 1.5, m2: 1.5, g: 24.79, damp: 0.02 },
+    space:   { L1: 1.5, L2: 1.5, m1: 0.8, m2: 0.8, g: 0.10, damp: 0.00 }
+  };
+  const STORE_KEY = "double_pendulum_v1";
+  const sids = { L1:'s-l1', L2:'s-l2', m1:'s-m1', m2:'s-m2', g:'s-g', damp:'s-dp' };
+  const lids = { L1:'c-l1', L2:'c-l2', m1:'c-m1', m2:'c-m2', g:'c-g', damp:'c-dp' };
+  const fmts = { L1:f2, L2:f2, m1:f1, m2:f1, g:f1, damp:f3 };
+
+  let currentScene = null;
+  let tween = null;          // { from:{}, to:{}, t0, dur }
+
+  function syncSliderFromP() {
+    for (const k in sids) {
+      const s = document.getElementById(sids[k]);
+      if (s) s.value = P[k];
+      const l = document.getElementById(lids[k]);
+      if (l) l.textContent = fmts[k](P[k]);
+    }
+    rescale();
+  }
+  function updateSceneChips() {
+    document.querySelectorAll('.scene-chip').forEach(function (c) {
+      c.classList.toggle('active', c.dataset.scene === currentScene);
+    });
+  }
+  function clampToSlider(k, v) {
+    const s = document.getElementById(sids[k]);
+    if (!s) return v;
+    return Math.max(parseFloat(s.min), Math.min(parseFloat(s.max), v));
+  }
+
+  function startScene(name) {
+    const target = PRESETS[name];
+    if (!target) return;
+    currentScene = name;
+    updateSceneChips();
+    const from = {};
+    for (const k in target) from[k] = P[k];
+    tween = { from: from, to: target, t0: performance.now(), dur: 700 };
+  }
+  function updateTween(now) {
+    if (!tween) return;
+    let k = (now - tween.t0) / tween.dur;
+    if (k >= 1) k = 1;
+    // ease-in-out cubic
+    const e = k < 0.5 ? 4*k*k*k : 1 - Math.pow(-2*k+2, 3)/2;
+    let rescaleNeeded = false;
+    for (const key in tween.to) {
+      P[key] = tween.from[key] + (tween.to[key] - tween.from[key]) * e;
+      const s = document.getElementById(sids[key]);
+      if (s) s.value = P[key];
+      const l = document.getElementById(lids[key]);
+      if (l) l.textContent = fmts[key](P[key]);
+      if (key === 'L1' || key === 'L2') rescaleNeeded = true;
+    }
+    if (rescaleNeeded) rescale();
+    rebase();
+    if (k >= 1) { tween = null; saveSoon(); }   // 过渡结束才落盘，避免半截状态被持久化
+  }
+
+  function saveSoon() {
+    if (saveSoon._t) clearTimeout(saveSoon._t);
+    saveSoon._t = setTimeout(function () {
+      try {
+        localStorage.setItem(STORE_KEY, JSON.stringify({
+          L1: P.L1, L2: P.L2, m1: P.m1, m2: P.m2, g: P.g, damp: P.damp,
+          lastScene: currentScene
+        }));
+      } catch (e) { /* 隐私模式 / quota 满 → 静默降级 */ }
+    }, 80);
+  }
+  function loadAndApply() {
+    try {
+      const raw = localStorage.getItem(STORE_KEY);
+      if (!raw) return;
+      const data = JSON.parse(raw);
+      for (const k of ['L1','L2','m1','m2','g','damp']) {
+        if (typeof data[k] === 'number' && Number.isFinite(data[k])) {
+          P[k] = clampToSlider(k, data[k]);
+        }
+      }
+      if (typeof data.lastScene === 'string' && PRESETS[data.lastScene]) {
+        currentScene = data.lastScene;
+      }
+    } catch (e) { /* 解析失败 → 用默认值 */ }
+    syncSliderFromP();
+    updateSceneChips();
+    rebase();                            // 恢复出的 P 与默认值不同，必须重设能量基准
+  }
+
+  // 绑定场景胶囊
+  document.querySelectorAll('.scene-chip').forEach(function (chip) {
+    chip.addEventListener('click', function () { startScene(this.dataset.scene); });
+  });
+
+  const bPause = document.getElementById("b-pause");
+  bPause.addEventListener("click", function () {
+    running = !running;
+    this.textContent = running ? "暂停 (空格)" : "继续 (空格)";
+  });
+
+  function resetAll() {
+    reset();
+    running = true;
+    bPause.textContent = "暂停 (空格)";
+  }
+  document.getElementById("b-reset").addEventListener("click", resetAll);
+  document.getElementById("b-clear").addEventListener("click", function () { trail = []; });
+
+  document.getElementById("c-ghost").addEventListener("change", function () {
+    useGhost = this.checked;
+    syncGhost();
+  });
+
+  window.addEventListener("keydown", function (e) {
+    if (e.code === "Space") { e.preventDefault(); bPause.click(); }
+    if (e.key === "r" || e.key === "R") resetAll();
+  });
+
+  // ---------- 启动 ----------
+  resize();
+  reset();
+  loadAndApply();                  // 从 localStorage 恢复上次参数（若有）
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>

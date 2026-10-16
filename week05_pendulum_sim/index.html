@@ -1,0 +1,449 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>单摆简谐振动仿真 · Week 05</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body { width: 100%; height: 100%; overflow: hidden; }
+  body {
+    background: #1a1a24;
+    font-family: "Segoe UI", "PingFang SC", "Microsoft YaHei", sans-serif;
+    color: #cfd4e0;
+    display: flex;
+    flex-direction: column;
+  }
+  /* flex-basis:0 —— 画布高度只由剩余空间决定，不受 canvas.height 属性反噬 */
+  #stage { display: block; width: 100%; flex: 1 1 0; min-height: 0; }
+
+  .panel {
+    position: fixed;
+    background: rgba(28, 28, 40, 0.82);
+    border: 1px solid rgba(120, 200, 255, 0.18);
+    border-radius: 10px;
+    padding: 14px 16px;
+    backdrop-filter: blur(6px);
+    font-size: 12px;
+    line-height: 1.9;
+    box-shadow: 0 6px 24px rgba(0, 0, 0, 0.45);
+    user-select: none;
+  }
+  #readout  { right: 20px; top: 20px; min-width: 208px; }
+
+  /* 画布下方的参数控制坞 */
+  #dock {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    gap: 24px;
+    padding: 12px 22px 14px;
+    background: rgba(24, 24, 34, 0.94);
+    border-top: 1px solid rgba(120, 200, 255, 0.16);
+    box-shadow: 0 -8px 26px rgba(0, 0, 0, 0.45);
+    user-select: none;
+    flex-wrap: wrap;
+  }
+  .dock-btns { flex: 2 1 320px; display: flex; align-items: center; gap: 10px; }
+  .dock-btns button { flex: 0 0 auto; padding: 8px 14px; }
+  .tip { color: #4d5468; font-size: 11px; letter-spacing: 1px; }
+
+  .panel h2 {
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 2px;
+    color: #56e1ff;
+    margin-bottom: 10px;
+    text-transform: uppercase;
+    border-bottom: 1px solid rgba(86, 225, 255, 0.2);
+    padding-bottom: 6px;
+  }
+
+  .row { display: flex; justify-content: space-between; align-items: center; margin: 6px 0; }
+  .row label { color: #8b93a7; }
+  .row .val { color: #e6ebf5; font-variant-numeric: tabular-nums; }
+  .row .val em { color: #56e1ff; font-style: normal; }
+
+  .ctrl { flex: 1 1 150px; min-width: 150px; margin: 0; }
+  .ctrl .cap { display: flex; justify-content: space-between; color: #8b93a7; font-size: 11px; }
+  .ctrl .cap b { color: #56e1ff; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  input[type=range] {
+    -webkit-appearance: none; appearance: none;
+    width: 100%; height: 4px; border-radius: 2px;
+    background: rgba(86, 225, 255, 0.22);
+    outline: none; margin-top: 7px; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 13px; height: 13px; border-radius: 50%;
+    background: #56e1ff; border: none;
+    box-shadow: 0 0 8px rgba(86, 225, 255, 0.9);
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 13px; height: 13px; border-radius: 50%; border: none;
+    background: #56e1ff; box-shadow: 0 0 8px rgba(86, 225, 255, 0.9);
+  }
+
+  .btns { display: flex; gap: 8px; margin-top: 12px; }
+  button {
+    flex: 1; padding: 7px 0;
+    background: rgba(86, 225, 255, 0.1);
+    border: 1px solid rgba(86, 225, 255, 0.35);
+    border-radius: 6px; color: #56e1ff;
+    font-size: 12px; cursor: pointer;
+    transition: background .15s;
+  }
+  button:hover { background: rgba(86, 225, 255, 0.22); }
+
+  .check { display: flex; align-items: center; gap: 7px; color: #8b93a7; cursor: pointer; white-space: nowrap; }
+  .check input { accent-color: #56e1ff; cursor: pointer; }
+</style>
+</head>
+<body>
+
+<canvas id="stage"></canvas>
+
+<div class="panel" id="readout">
+  <h2>Real-time Data</h2>
+  <div class="row"><label>摆角 θ</label><span class="val"><em id="v-ang">0.0</em> °</span></div>
+  <div class="row"><label>角速度 ω</label><span class="val" id="v-omg">0.000 rad/s</span></div>
+  <div class="row"><label>线速度 v</label><span class="val" id="v-vel">0.00 m/s</span></div>
+  <div class="row"><label>周期 T</label><span class="val"><em id="v-per">0.000</em> s</span></div>
+  <div class="row"><label>总能量 E</label><span class="val" id="v-eng">0.000 J</span></div>
+  <div class="row"><label>帧率</label><span class="val" id="v-fps">60 fps</span></div>
+</div>
+
+<div id="dock">
+  <div class="ctrl">
+    <div class="cap"><span>摆长 L</span><b><span id="c-len">200</span> px</b></div>
+    <input type="range" id="s-len" min="100" max="350" step="1" value="200">
+  </div>
+  <div class="ctrl">
+    <div class="cap"><span>重力 g</span><b><span id="c-grv">9.8</span> m/s²</b></div>
+    <input type="range" id="s-grv" min="1" max="25" step="0.1" value="9.8">
+  </div>
+  <div class="ctrl">
+    <div class="cap"><span>阻尼 ζ</span><b><span id="c-dmp">0.000</span></b></div>
+    <input type="range" id="s-dmp" min="0" max="0.01" step="0.0005" value="0">
+  </div>
+
+  <div class="dock-btns">
+    <button id="b-reset" title="回到 45° 初始状态">重置摆动</button>
+    <button id="b-pause">暂停</button>
+    <button id="b-trail">拖尾</button>
+    <label class="check"><input type="checkbox" id="c-shm">SHM 线性近似</label>
+    <span class="tip">空格暂停 · R 重置</span>
+  </div>
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  const canvas = document.getElementById("stage");
+  const ctx = canvas.getContext("2d");
+
+  const BG        = "#1a1a24";
+  const BALL_CORE = "#eafcff";
+  const BALL_MAIN = "#56e1ff";
+  const PPM       = 100;          // 像素 / 米：把像素摆长换算成物理米
+  const FIXED_DT  = 1 / 240;      // 物理定步长，保证积分稳定
+  const BALL_R    = 17;           // 摆球半径(px)
+  const TRAIL_MAX = 70;           // 拖尾采样点数
+
+  // ---------- 状态 ----------
+  const INIT_ANGLE = 45;                    // 初始摆角固定 45°，重置即回到该状态
+  const P = { L: 200, g: 9.8, theta0: INIT_ANGLE, damping: 0, shm: false };
+  let theta = 0, omega = 0;       // 弧度 / 弧度每秒
+  let running = true, showTrail = true;
+  let trail = [];
+  let W = 0, H = 0, pivotX = 0, pivotY = 0;
+
+  const DEG = Math.PI / 180;
+
+  function reset() {
+    theta = INIT_ANGLE * DEG;
+    omega = 0;
+    trail = [];
+  }
+
+  // ---------- 尺寸自适应（含高清屏） ----------
+  function resize() {
+    const dpr = window.devicePixelRatio || 1;
+    // 用画布自身的布局尺寸，而不是窗口尺寸：控制坞会占掉一部分高度
+    W = canvas.clientWidth  || window.innerWidth;
+    H = canvas.clientHeight || window.innerHeight;
+    canvas.width  = Math.round(W * dpr);
+    canvas.height = Math.round(H * dpr);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    pivotX = W / 2;
+    // 支点下移一点，保证 L 取到 350px 时摆球仍在可视区内
+    pivotY = Math.max(50, Math.min(H * 0.12, H - 390));
+    trail = [];               // 尺寸变化后旧坐标失效，清空拖尾
+  }
+  window.addEventListener("resize", resize);
+
+  // ---------- 物理积分：半隐式欧拉（辛积分，长期能量稳定） ----------
+  function integrate(dt) {
+    const Lm    = P.L / PPM;                       // 摆长(米)
+    const w0    = Math.sqrt(P.g / Lm);             // 固有角频率 ω₀ = √(g/L)
+    const acc   = P.shm
+      ? -(w0 * w0) * theta                         // 线性近似：θ'' = −ω₀²θ      → 理想简谐
+      : -(w0 * w0) * Math.sin(theta);              // 精确单摆：θ'' = −ω₀²·sinθ
+    // 阻尼采用标准阻尼比形式 θ'' += −2ζω₀ω：
+    // ζ = 0.010 时，振幅衰减到 1/e 约需 1/(2πζ) ≈ 16 次摆动，属"轻微阻尼、自然衰减"
+    const total = acc - 2 * P.damping * w0 * omega;
+    omega += total * dt;
+    theta += omega * dt;
+  }
+
+  // ---------- 绘制 ----------
+  function drawGrid() {
+    ctx.save();
+    ctx.strokeStyle = "rgba(120, 200, 255, 0.045)";
+    ctx.lineWidth = 1;
+    const gap = 44;
+    ctx.beginPath();
+    for (let x = (W / 2) % gap; x < W; x += gap) { ctx.moveTo(x, 0); ctx.lineTo(x, H); }
+    for (let y = 0; y < H; y += gap)             { ctx.moveTo(0, y); ctx.lineTo(W, y); }
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawPivot() {
+    ctx.save();
+    // 悬挂横梁
+    ctx.strokeStyle = "rgba(140, 160, 190, 0.35)";
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(pivotX - 70, pivotY);
+    ctx.lineTo(pivotX + 70, pivotY);
+    ctx.stroke();
+
+    // 支点
+    ctx.fillStyle = "#8b93a7";
+    ctx.beginPath();
+    ctx.arc(pivotX, pivotY, 5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawReference(bx, by) {
+    ctx.save();
+    // 铅垂参考线
+    ctx.setLineDash([4, 6]);
+    ctx.strokeStyle = "rgba(140, 160, 190, 0.22)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(pivotX, pivotY);
+    ctx.lineTo(pivotX, pivotY + P.L + 40);
+    ctx.stroke();
+    ctx.setLineDash([]);
+
+    // 摆动圆弧轨迹（摆球所在画布角 a = π/2 − θ）
+    const amp = P.theta0 * DEG;
+    ctx.strokeStyle = "rgba(86, 225, 255, 0.13)";
+    ctx.beginPath();
+    ctx.arc(pivotX, pivotY, P.L, Math.PI / 2 - amp, Math.PI / 2 + amp);
+    ctx.stroke();
+
+    // 角度扇形
+    const a0 = Math.PI / 2, a1 = Math.PI / 2 - theta;
+    ctx.fillStyle = "rgba(86, 225, 255, 0.10)";
+    ctx.beginPath();
+    ctx.moveTo(pivotX, pivotY);
+    ctx.arc(pivotX, pivotY, 56, Math.min(a0, a1), Math.max(a0, a1));
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawTrail() {
+    if (!showTrail || trail.length < 2) return;
+    ctx.save();
+    ctx.lineCap = "round";
+    for (let i = 1; i < trail.length; i++) {
+      const t = i / trail.length;                     // 越老越淡
+      ctx.strokeStyle = "rgba(86, 225, 255," + (t * 0.38).toFixed(3) + ")";
+      ctx.lineWidth = t * BALL_R * 0.55;
+      ctx.beginPath();
+      ctx.moveTo(trail[i - 1].x, trail[i - 1].y);
+      ctx.lineTo(trail[i].x, trail[i].y);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawRod(bx, by) {
+    ctx.save();
+    ctx.lineCap = "round";
+    ctx.lineWidth = 2.5;
+    const grad = ctx.createLinearGradient(pivotX, pivotY, bx, by);
+    grad.addColorStop(0, "rgba(160, 180, 210, 0.85)");
+    grad.addColorStop(1, "rgba(86, 225, 255, 0.95)");
+    ctx.strokeStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(pivotX, pivotY);
+    ctx.lineTo(bx, by);
+    ctx.stroke();
+    ctx.restore();
+  }
+
+  function drawBall(bx, by) {
+    ctx.save();
+
+    // 外发光
+    ctx.shadowColor = "rgba(86, 225, 255, 0.9)";
+    ctx.shadowBlur  = 34;
+
+    // 球体本体
+    const g = ctx.createRadialGradient(
+      bx - BALL_R * 0.35, by - BALL_R * 0.4, BALL_R * 0.12,
+      bx, by, BALL_R
+    );
+    g.addColorStop(0.00, BALL_CORE);
+    g.addColorStop(0.35, BALL_MAIN);
+    g.addColorStop(1.00, "rgba(30, 140, 190, 0.95)");
+    ctx.fillStyle = g;
+    ctx.beginPath();
+    ctx.arc(bx, by, BALL_R, 0, Math.PI * 2);
+    ctx.fill();
+
+    // 内圈微光
+    ctx.shadowBlur = 12;
+    ctx.strokeStyle = "rgba(234, 252, 255, 0.55)";
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.arc(bx, by, BALL_R - 1.5, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // 高光点
+    ctx.shadowBlur = 0;
+    ctx.fillStyle = "rgba(255, 255, 255, 0.85)";
+    ctx.beginPath();
+    ctx.arc(bx - BALL_R * 0.32, by - BALL_R * 0.36, BALL_R * 0.16, 0, Math.PI * 2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // ---------- 数值读数 ----------
+  const el = {
+    ang: document.getElementById("v-ang"),
+    omg: document.getElementById("v-omg"),
+    vel: document.getElementById("v-vel"),
+    per: document.getElementById("v-per"),
+    eng: document.getElementById("v-eng"),
+    fps: document.getElementById("v-fps")
+  };
+  let fpsAcc = 0, fpsCnt = 0, fpsShown = 60;
+
+  function updateReadout() {
+    const Lm = P.L / PPM;
+    const v  = Math.abs(omega) * Lm;
+    const T  = 2 * Math.PI * Math.sqrt(Lm / P.g);
+    // m = 1kg 时的机械能
+    const E  = 0.5 * Lm * Lm * omega * omega + P.g * Lm * (1 - Math.cos(theta));
+
+    el.ang.textContent = (theta / DEG).toFixed(1);
+    el.omg.textContent = omega.toFixed(3) + " rad/s";
+    el.vel.textContent = v.toFixed(2) + " m/s";
+    el.per.textContent = T.toFixed(3);
+    el.eng.textContent = E.toFixed(3) + " J";
+    el.fps.textContent = fpsShown + " fps";
+  }
+
+  // ---------- 主循环 ----------
+  let last = performance.now();
+  let acc  = 0;
+
+  function frame(now) {
+    let real = (now - last) / 1000;
+    last = now;
+    if (real > 0.05) real = 0.05;          // 切后台回来时防止大跳步
+
+    // FPS 统计
+    fpsAcc += real; fpsCnt++;
+    if (fpsAcc >= 0.5) { fpsShown = Math.round(fpsCnt / fpsAcc); fpsAcc = 0; fpsCnt = 0; }
+
+    if (running) {
+      acc += real;
+      while (acc >= FIXED_DT) { integrate(FIXED_DT); acc -= FIXED_DT; }
+    }
+
+    const bx = pivotX + P.L * Math.sin(theta);
+    const by = pivotY + P.L * Math.cos(theta);
+
+    if (running) {
+      trail.push({ x: bx, y: by });
+      if (trail.length > TRAIL_MAX) trail.shift();
+    }
+
+    ctx.fillStyle = BG;
+    ctx.fillRect(0, 0, W, H);
+    drawGrid();
+    drawReference(bx, by);
+    drawTrail();
+    drawRod(bx, by);
+    drawBall(bx, by);
+    drawPivot();
+
+    updateReadout();
+    requestAnimationFrame(frame);
+  }
+
+  // ---------- 控件绑定 ----------
+  function bind(sliderId, labelId, key, fmt) {
+    const s = document.getElementById(sliderId);
+    const l = document.getElementById(labelId);
+    s.addEventListener("input", function () {
+      P[key] = parseFloat(s.value);
+      l.textContent = fmt(P[key]);
+    });
+  }
+  const f0 = function (v) { return String(Math.round(v)); };
+  const f1 = function (v) { return v.toFixed(1); };
+  const f3 = function (v) { return v.toFixed(3); };
+
+  bind("s-len", "c-len", "L",       f0);
+  bind("s-grv", "c-grv", "g",       f1);
+  bind("s-dmp", "c-dmp", "damping", f3);
+
+  const bPause = document.getElementById("b-pause");
+  bPause.addEventListener("click", function () {
+    running = !running;
+    this.textContent = running ? "暂停" : "继续";
+  });
+
+  // 重置：回到 45° 静止初始状态，并恢复运行
+  function resetAll() {
+    reset();
+    running = true;
+    bPause.textContent = "暂停";
+  }
+  document.getElementById("b-reset").addEventListener("click", resetAll);
+
+  const bTrail = document.getElementById("b-trail");
+  bTrail.addEventListener("click", function () {
+    showTrail = !showTrail;
+    if (!showTrail) trail = [];
+  });
+
+  document.getElementById("c-shm").addEventListener("change", function () {
+    P.shm = this.checked;
+  });
+
+  window.addEventListener("keydown", function (e) {
+    if (e.code === "Space") { e.preventDefault(); bPause.click(); }
+    if (e.key === "r" || e.key === "R") resetAll();
+  });
+
+  // ---------- 启动 ----------
+  resize();
+  reset();
+  requestAnimationFrame(frame);
+})();
+</script>
+</body>
+</html>
